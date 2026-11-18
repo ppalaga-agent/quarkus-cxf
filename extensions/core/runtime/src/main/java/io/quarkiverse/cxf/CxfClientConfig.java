@@ -3,6 +3,7 @@ package io.quarkiverse.cxf;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import org.apache.cxf.annotations.SchemaValidation.SchemaValidationType;
 import org.apache.cxf.configuration.jsse.TLSClientParameters;
@@ -359,9 +360,15 @@ public interface CxfClientConfig {
     public Optional<String> host();
 
     /**
-     * The connection disposition. If close the connection to the server is closed after each request/response dialog. If
-     * Keep-Alive the client requests the server to keep the connection open, and if the server honors the keep alive request,
-     * the connection is reused. Many servers and proxies do not honor keep-alive requests.
+     * The value of `Connection` HTTP header for HTTP 1.x connections. Possible values:
+     *
+     * * `close` - the connection to the server is closed after each request/response exchange
+     * * `keep-alive` (default) - the client requests the server to keep the connection open and if the server honors
+     * the keep alive request, the connection is reused. Many servers and proxies do not honor keep-alive requests.
+     * See also
+     * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-vertx-keep-alive-timeout[quarkus.cxf.client."client-name".vertx.keep-alive-timeout]`
+     *
+     * The `close` value might get ignored with `VertxHttpClientHTTPConduitFactory` and
      *
      * @since 2.2.3
      * @asciidoclet
@@ -396,6 +403,9 @@ public interface CxfClientConfig {
      *
      * While `VertxHttpClientHTTPConduitFactory` supports all of the named HTTP protocol versions,
      * `URLConnectionHTTPConduitFactory` supports only versions `1.0` and `1.1`.
+     * For an exact ordered list of supported versions with the Vert.x conduit, use
+     * `xref:#quarkus-cxf_quarkus-cxf-client-client-name-vertx-http-versions[quarkus.cxf.client."client-name".vertx.http-versions]`
+     * and leave this option at `auto`.
      *
      * @since 2.2.3
      * @asciidoclet
@@ -592,6 +602,47 @@ public interface CxfClientConfig {
      */
     interface VertxConfig {
         /**
+         * Ordered (most preferred first) list of HTTP protocol versions the client is allowed to use.
+         * Possible values are `1.0`, `1.1` and `2`.
+         *
+         * Examples:
+         *
+         * * `2,1.1` - permits HTTP/2 with HTTP/1.1 fallback
+         * * `2` - requires HTTP/2
+         *
+         * For HTTPS service URLs, the order determines the preference advertised through TLS ALPN (Application-Layer Protocol
+         * Negotiation)
+         * and it is the server who selects the protocol version.
+         *
+         * For clear text (non-HTTPS) service URLs:
+         *
+         * * With `2,1.1`, the establishment of the HTTP/2 connection is done as follows:
+         * ** First a body-less HTTP/1.1 `OPTIONS` "preflight" request is send, as per RFC 7540 §3.2.1,
+         * with `Connection: Upgrade` and `Upgrade: h2c` headers;
+         * *** If the server answers `101 Switching Protocols`, then the same connection continues as HTTP/2;
+         * *** Otherwise, the exchange continues as plain HTTP/1.1.
+         * * Appending `1.0` to `2,1.1` has no real effect. If the server rejects HTTP/1.1, the client won't retry using
+         * HTTP/1.0.
+         * It can accept an HTTP/1.0 response to an HTTP/1.1 request, but that does not switch subsequent requests to HTTP/1.0.
+         * * With `2` alone, as per RFC 9113, the client opens a TCP connection
+         * and sends the HTTP/2 connection preface (`PRI * HTTP/2.0 ...`) directly,
+         * with no HTTP/1.x exchange first.
+         * Both sides have to know in advance (have the "prior knowledge") that the server supports `h2c`.
+         *
+         * If not set, the existing
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-version[quarkus.cxf.client."client-name".version]`
+         * behavior is preserved,
+         * including its default of HTTP/1.1 and HTTP/2 fallback.
+         * When this list is set,
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-version[quarkus.cxf.client."client-name".version]`
+         * must remain `auto` and CXF per-request version overrides cannot be used.
+         *
+         * @asciidoclet
+         * @since 4.0.0
+         */
+        Optional<List<String>> httpVersions();
+
+        /**
          * Settings used by `io.vertx.core.http.PoolOptions`.
          *
          * @asciidoclet
@@ -600,12 +651,20 @@ public interface CxfClientConfig {
         ConnectionPool connectionPool();
 
         /**
-         * Duration in seconds after which inactive HTTP/1.x client connections will be closed
-         * if the client was configured with `quarkus.cxf.client."client-name".connection = keep-alive`.
-         * Connections of clients configured with `quarkus.cxf.client."client-name".connection = close` are closed
-         * immediately after receiving the response.
+         * Duration in seconds after which inactive client connections will be closed.
+         *
+         * For HTTP 1.x connections, this option is only honored, if the client was configured with
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-connection[quarkus.cxf.client."client-name".connection]
+         * = keep-alive`.
          *
          * Value `0` means no timeout.
+         *
+         * [NOTE]
+         * .Historical note
+         * ====
+         * Since {quarkus-cxf-project-name} 4.0.0, this option applies to all HTTP protocol versions.
+         * Before that version, it only applied to HTTP 1.x.
+         * ====
          *
          * @asciidoclet
          * @since 3.31.0
@@ -615,14 +674,28 @@ public interface CxfClientConfig {
 
         /**
          * Duration in seconds after which inactive HTTP/2 client connections will be closed.
+         * Overrides the value set via
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-vertx-keep-alive-timeout[quarkus.cxf.client."client-name".vertx.keep-alive-timeout]`
+         * for HTTP/2 client connections.
          *
          * Value `0` means no timeout.
          *
+         * [NOTE]
+         * .Historical note
+         * ====
+         * Since {quarkus-cxf-project-name} 4.0.0, this option effectively defaults to the value set in
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-vertx-keep-alive-timeout[quarkus.cxf.client."client-name".vertx.keep-alive-timeout]`
+         * Before that version, the default value was 60 seconds and
+         * `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-vertx-keep-alive-timeout[quarkus.cxf.client."client-name".vertx.keep-alive-timeout]`
+         * had no impact on HTTP/2 connections
+         * ====
+         *
          * @asciidoclet
          * @since 3.31.0
+         * @deprecated Use {@link #keepAliveTimeout()}
          */
-        @WithDefault("60")
-        int http2KeepAliveTimeout();
+        @Deprecated
+        OptionalInt http2KeepAliveTimeout();
 
         /**
          * Configure the given {@link HttpClientOptions} based on the values in this {@link VertxConfig}.
@@ -632,19 +705,12 @@ public interface CxfClientConfig {
          * @since 3.25.0
          */
         default void configure(HttpClientOptions opts, ConnectionType connectionType, PoolOptions poolOptions) {
-            HttpVersion version = opts.getProtocolVersion();
-            if (HttpVersion.HTTP_2.equals(version)) {
-                opts.setHttp2KeepAliveTimeout(http2KeepAliveTimeout());
+            opts.setKeepAliveTimeout(keepAliveTimeout());
+            opts.setHttp2KeepAliveTimeout(http2KeepAliveTimeout().orElse(keepAliveTimeout()));
+            // HTTP/2 clients need keep-alive while upgrading their first cleartext request.
+            if (opts.getProtocolVersion() != HttpVersion.HTTP_2) {
+                opts.setKeepAlive(ConnectionType.KEEP_ALIVE.equals(connectionType));
             }
-            if (HttpVersion.HTTP_1_1.equals(version) || HttpVersion.HTTP_1_0.equals(version)) {
-                if (ConnectionType.KEEP_ALIVE.equals(connectionType)) {
-                    opts.setKeepAlive(true);
-                    opts.setKeepAliveTimeout(keepAliveTimeout());
-                } else {
-                    opts.setKeepAlive(false);
-                }
-            }
-
             connectionPool().configure(poolOptions);
         }
     }
@@ -720,6 +786,22 @@ public interface CxfClientConfig {
             poolOptions.setEventLoopSize(eventLoopSize());
             poolOptions.setMaxWaitQueueSize(maxWaitQueueSize());
         }
+    }
+
+    public enum H2cMode {
+        preflight("preflight"),
+        prior_knowledge("prior-knowledge");
+
+        private final String value;
+
+        H2cMode(String v) {
+            value = v;
+        }
+
+        public String value() {
+            return value;
+        }
+
     }
 
     public enum WellKnownHostnameVerifier {
