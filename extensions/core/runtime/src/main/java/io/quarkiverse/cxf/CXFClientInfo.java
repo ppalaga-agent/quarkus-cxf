@@ -1,6 +1,7 @@
 package io.quarkiverse.cxf;
 
 import java.net.Proxy.Type;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -263,7 +264,7 @@ public class CXFClientInfo {
         }
         final String key = "quarkus.cxf.client." + QuarkusCxfUtils.quoteCongurationKeyIfNeeded(configKey);
         if (!"auto".equals(config.version())) {
-            throw new IllegalArgumentException(key + ".vertx.versions cannot be combined with " + key
+            throw new IllegalArgumentException(key + ".vertx.http-versions cannot be combined with " + key
                     + ".version=" + config.version() + "; leave version at auto");
         }
         final List<HttpVersion> versions = new ArrayList<>();
@@ -274,12 +275,12 @@ public class CXFClientInfo {
         for (String value : values) {
             final HttpVersion version = parseHttpVersion(key, value);
             if (versions.contains(version)) {
-                throw new IllegalArgumentException("Duplicate HTTP version '" + value + "' in " + key + ".vertx.versions");
+                throw new IllegalArgumentException("Duplicate HTTP version '" + value + "' in " + key + ".vertx.http-versions");
             }
             versions.add(version);
         }
         if (versions.isEmpty()) {
-            throw new IllegalArgumentException(key + ".vertx.versions must contain at least one HTTP version");
+            throw new IllegalArgumentException(key + ".vertx.http-versions must contain at least one HTTP version");
         }
         return List.copyOf(versions);
     }
@@ -290,8 +291,21 @@ public class CXFClientInfo {
             case "1.1" -> HttpVersion.HTTP_1_1;
             case "2" -> HttpVersion.HTTP_2;
             default -> throw new IllegalArgumentException("Unsupported HTTP version '" + value + "' in " + key
-                    + ".vertx.versions; supported values are 1.0, 1.1 and 2");
+                    + ".vertx.http-versions; supported values are 1.0, 1.1 and 2");
         };
+    }
+
+    public String httpVersionsProperty() {
+        return "quarkus.cxf.client." + QuarkusCxfUtils.quoteCongurationKeyIfNeeded(configKey) + ".vertx.http-versions";
+    }
+
+    /** Validate the effective destination, without including credentials or query parameters in diagnostics. */
+    public void validateHttpVersions(URI destination) {
+        if (httpVersions.size() > 1 && httpVersions.get(0) == HttpVersion.HTTP_2
+                && !httpVersions.contains(HttpVersion.HTTP_1_1) && "http".equalsIgnoreCase(destination.getScheme())) {
+            throw new IllegalArgumentException(httpVersionsProperty()
+                    + "=2,1.0 cannot be used with plaintext HTTP; use 2 for prior knowledge or include 1.1 for h2c upgrade");
+        }
     }
 
     static TlsConfiguration tlsConfiguration(Vertx vertx, CxfGlobalClientConfig globalConfig, CxfClientConfig config,
