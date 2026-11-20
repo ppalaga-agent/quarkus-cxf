@@ -30,7 +30,7 @@ import io.vertx.core.net.ProxyType;
 @ApplicationScoped
 public class HttpClientPool {
     private static final Logger log = Logger.getLogger(HttpClientPool.class);
-    private final Map<String, ClientEntry> clients = new ConcurrentHashMap<>();
+    private final Map<ClientKey, ClientEntry> clients = new ConcurrentHashMap<>();
     private final Vertx vertx;
 
     HttpClientPool() {
@@ -48,13 +48,14 @@ public class HttpClientPool {
      * {@link #onCertificateUpdate(CertificateUpdatedEvent)} then the client may still work for one request, but will be
      * re-created on the subsequent request.
      *
-     * @param spec the caching key
+     * @param clientInfo the client configuration
      * @return a possibly pooled client
      */
     public HttpClient getClient(CXFClientInfo clientInfo, HttpVersion version, TlsConfiguration tlsConfiguration,
             ProxyConfiguration proxyConfiguration) {
-        final String key = clientInfo.getConfigKey();
-        Objects.requireNonNull(key, "CXFClientInfo.configKey cannot be null");
+        final ClientKey key = new ClientKey(
+                Objects.requireNonNull(clientInfo.getConfigKey(), "CXFClientInfo.configKey cannot be null"),
+                version, tlsConfiguration);
         return clients.computeIfAbsent(key, v -> {
             final HttpClientOptions opts = new HttpClientOptions()
                     .setProtocolVersion(version);
@@ -75,31 +76,44 @@ public class HttpClientPool {
 
             if (tlsConfiguration != null) {
                 TlsConfigUtils.configure(opts, tlsConfiguration);
-                return new ClientEntry(vertx.createHttpClient(opts, poolOptions), tlsConfiguration.getName());
-            } else {
-                return new ClientEntry(vertx.createHttpClient(opts, poolOptions), null);
             }
+            final List<HttpVersion> versions = clientInfo.getHttpVersions();
+            if (!versions.isEmpty()) {
+                /*
+                 * HttpClientConfig(HttpClientOptions) takes an explicit ALPN list verbatim, without expanding
+                 * protocolVersion into implicit fallback versions. Keep the options adapter to preserve customizers,
+                 * including forceSni, which HttpClientBuilder.with(HttpClientConfig) otherwise resets.
+                 * Vert.x enables ALPN only for TLS connections whose list contains HTTP/2.
+                 */
+                opts.setProtocolVersion(versions.get(0))
+                        .setAlpnVersions(versions)
+                        .setUseAlpn(true);
+                opts.getHttp2Config().setClearTextUpgrade(versions.size() > 1);
+            }
+            // Vert.x owns the bodyless OPTIONS exchange, upgrade, and fallback, including legacy HTTP/2 clients.
+            opts.getHttp2Config().setClearTextUpgradeWithPreflightRequest(true);
+            return new ClientEntry(vertx.createHttpClient(opts, poolOptions),
+                    tlsConfiguration != null ? tlsConfiguration.getName() : null);
         }).httpClient;
     }
 
     /**
-     * Called upon certificate reload. Clients having the given {@link ClientSpec#tlsConfigurationName} will be
-     * removed from this pool, so that they are created anew via {@link #getClient(ClientSpec)} on the next request.
+     * Update clients using the reloaded TLS configuration. Failed updates evict the client for recreation.
      *
      * @param event the update event
      */
     public void onCertificateUpdate(@Observes CertificateUpdatedEvent event) {
         final String tlsConfigName = event.name();
         final TlsConfiguration updatedTlsConfiguration = event.tlsConfiguration();
-        final Map<String, ClientEntry> clientsToUpdate = new LinkedHashMap<>();
-        for (Entry<String, ClientEntry> en : clients.entrySet()) {
+        final Map<ClientKey, ClientEntry> clientsToUpdate = new LinkedHashMap<>();
+        for (Entry<ClientKey, ClientEntry> en : clients.entrySet()) {
             if (tlsConfigName.equals(en.getValue().tlsConfigurationName)) {
                 clientsToUpdate.put(en.getKey(), en.getValue());
             }
         }
 
         if (!clientsToUpdate.isEmpty()) {
-            for (Entry<String, ClientEntry> en : clientsToUpdate.entrySet()) {
+            for (Entry<ClientKey, ClientEntry> en : clientsToUpdate.entrySet()) {
                 ((HttpClientAgent) en.getValue().httpClient)
                         .updateSSLOptions(updatedTlsConfiguration.getClientSSLOptions())
                         .onComplete(event1 -> {
@@ -107,19 +121,19 @@ public class HttpClientPool {
                                 if (event1.result()) {
                                     log.infof(
                                             "Certificate reloaded for the SOAP client '%s' using the TLS configuration (bucket) name '%s'",
-                                            en.getKey(),
+                                            en.getKey().configKey(),
                                             tlsConfigName);
                                 } else {
                                     log.warnf(
                                             "Certificate reload skipped for the SOAP client '%s' using the TLS configuration (bucket) name '%s'",
-                                            en.getKey(),
+                                            en.getKey().configKey(),
                                             tlsConfigName);
                                 }
                             } else {
                                 final Duration graceTimeout = Duration.ofSeconds(30);
                                 log.errorf(event1.cause(),
                                         "Certificate reload failed for the SOAP client '%s' using the TLS configuration (bucket) name '%s'. The client will be shutdown",
-                                        en.getKey(),
+                                        en.getKey().configKey(),
                                         tlsConfigName);
                                 clients.remove(en.getKey());
                                 en.getValue().httpClient.shutdown(graceTimeout)
@@ -148,6 +162,9 @@ public class HttpClientPool {
             default:
                 throw new IllegalArgumentException("Unexpected " + io.quarkus.proxy.ProxyType.class.getName() + " " + type);
         }
+    }
+
+    private record ClientKey(String configKey, HttpVersion version, TlsConfiguration tlsConfiguration) {
     }
 
     static record ClientEntry(HttpClient httpClient, String tlsConfigurationName) {

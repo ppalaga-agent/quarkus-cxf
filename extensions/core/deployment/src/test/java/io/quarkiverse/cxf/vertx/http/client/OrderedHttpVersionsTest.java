@@ -324,6 +324,27 @@ public class OrderedHttpVersionsTest {
         }
     }
 
+    @Test
+    void legacyOverrideAfterPooledRequest() throws Exception {
+        try (Peer peer = new Peer(false, true, false)) {
+            final Echo echo = legacyDefault.get();
+            try {
+                endpoint(echo, peer);
+                assertThat(echo.echo(PAYLOAD)).isEqualTo("HTTP_1_1:100000");
+                ((BindingProvider) echo).getRequestContext().put(FORCE, "2");
+                assertThat(echo.echo(PAYLOAD)).isEqualTo("HTTP_2:100000");
+                ((BindingProvider) echo).getRequestContext().remove(FORCE);
+                assertThat(echo.echo(PAYLOAD)).isEqualTo("HTTP_1_1:100000");
+                final List<Request> soap = peer.requests.stream().filter(r -> r.method().equals("POST")).toList();
+                assertThat(soap).extracting(Request::version).containsExactly("HTTP_1_1", "HTTP_2", "HTTP_1_1");
+                assertThat(soap.get(0).connection()).isEqualTo(soap.get(2).connection());
+                assertThat(peer.wire().split("OPTIONS ", -1).length - 1).isEqualTo(1);
+            } finally {
+                legacyDefault.destroy(echo);
+            }
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = { FORCE, ENABLE, "policy" })
     void explicitListRejectsOverridesBeforeDispatch(String override) throws Exception {
@@ -531,6 +552,8 @@ public class OrderedHttpVersionsTest {
                 if (info.getConfigKey().equals("customDirect")) {
                     options.setProtocolVersion(HttpVersion.HTTP_1_1);
                     options.setMaxHeaderSize(32_768);
+                    // HTTP/2 has a separate header-list limit; maxHeaderSize only configures the HTTP/1 parser.
+                    options.getInitialSettings().setMaxHeaderListSize(32_768);
                 }
             }));
             final Echo echo = customDirect.get();

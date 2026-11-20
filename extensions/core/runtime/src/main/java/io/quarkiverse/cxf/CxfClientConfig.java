@@ -634,33 +634,33 @@ public interface CxfClientConfig {
          * * `2` - require HTTP/2 without HTTP/1.x fallback
          * * `1.0` or `1.1` - select one HTTP/1.x version
          * * `1.1,2` - use HTTP/1.1 on plaintext HTTP connections;
-         *   advertise this preference order over TLS ALPN (Application-Layer Protocol Negotiation) for HTTPS connections
+         * advertise this preference order over TLS ALPN (Application-Layer Protocol Negotiation) for HTTPS connections
          *
          * HTTPS behavior:
          *
          * * Lists containing `2` advertise the permitted protocols in configured order through TLS ALPN.
-         *   The server chooses the protocol; client preference cannot force the server's preference.
+         * The server chooses the protocol; client preference cannot force the server's preference.
          * * Lists not containing `2` do not use ALPN.
-         *   The first list entry is used.
-         *   Thus `2,1.1` will work with HTTP/1.1-only and non-ALPN peers, whereas `2` requires negotiated HTTP/2.
+         * The first list entry is used.
+         * Thus `2,1.1` will work with HTTP/1.1-only and non-ALPN peers, whereas `2` requires negotiated HTTP/2.
          * * Similarly, `2,1.0` might be a reasonable choice for HTTP/1.0-only and non-ALPN peers.
          *
          * Plaintext HTTP behavior:
          *
          * * `2` - as per RFC 9113, the client opens a TCP connection
-         *   and sends the HTTP/2 connection preface (`PRI * HTTP/2.0 ...`) directly,
-         *   with no HTTP/1.x exchange first.
-         *   Both sides have to know in advance (have the "prior knowledge") that the server supports `h2c`.
+         * and sends the HTTP/2 connection preface (`PRI * HTTP/2.0 ...`) directly,
+         * with no HTTP/1.x exchange first.
+         * Both sides have to know in advance (have the "prior knowledge") that the server supports `h2c`.
          * * `2,1.1`, `2,1.1,1.0` and `2,1.0,1.1` send a bodyless HTTP/1.1 `OPTIONS` preflight
-         *   with `Connection: Upgrade` and `Upgrade: h2c` headers when establishing the connection.
-         *   A successful upgrade continues on the same connection using HTTP/2.
-         *   A normal refusal permits HTTP/1.1 on a usable connection; network or negotiation errors remain failures.
-         *   The preflight contains no SOAP body and is not repeated for each invocation on a reused connection.
+         * with `Connection: Upgrade` and `Upgrade: h2c` headers when establishing the connection.
+         * A successful upgrade continues on the same connection using HTTP/2.
+         * A normal refusal permits HTTP/1.1 on a usable connection; network or negotiation errors remain failures.
+         * The preflight contains no SOAP body and is not repeated for each invocation on a reused connection.
          * * Lists starting with `1.0` or `1.1` use that first version, without retries through later entries.
          * * `2,1.0` is rejected because h2c upgrade would require unlisted HTTP/1.1.
-         *   Adding `1.0` to a list starting with `2` does not provide HTTP/1.0 fallback on plaintext connections.
+         * Adding `1.0` to a list starting with `2` does not provide HTTP/1.0 fallback on plaintext connections.
          * * Although Vert.x HttpClient will accept HTTP/1.0 response to an HTTP/1.1 request,
-         *   it still does not change subsequent outgoing requests to HTTP/1.0.
+         * it still does not change subsequent outgoing requests to HTTP/1.0.
          *
          * Scheme-specific validation uses the effective destination, including endpoint overrides and redirects.
          *
