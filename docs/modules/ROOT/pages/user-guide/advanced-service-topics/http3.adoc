@@ -73,6 +73,13 @@ $ curl --http3-only -k -s -o /dev/null -w '%{http_code} HTTP/%{http_version}\n' 
 
 The service implementation can find out the HTTP version of the current request
 via `jakarta.servlet.http.HttpServletRequest.getProtocol()`.
+It returns `HTTP/1.1`, `HTTP/2.0` or `HTTP/3.0`.
+
+[NOTE]
+====
+{quarkus-cxf-project-name} 4.0.0 returned the ALPN names `http/1.1`, `h2` and `h3` instead,
+see the xref:release-notes/4.0.1.adoc[4.0.1 release notes].
+====
 
 HelloServiceImpl.java
 [source,java]
