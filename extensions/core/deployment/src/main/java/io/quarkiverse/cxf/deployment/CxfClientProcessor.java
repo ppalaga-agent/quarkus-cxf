@@ -8,7 +8,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -18,6 +20,7 @@ import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
 import jakarta.enterprise.inject.spi.InjectionPoint;
 import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import jakarta.xml.ws.BindingProvider;
 import jakarta.xml.ws.soap.SOAPBinding;
 
@@ -37,6 +40,7 @@ import org.jboss.jandex.Type;
 import org.jboss.logging.Logger;
 
 import io.quarkiverse.cxf.CXFClientData;
+import io.quarkiverse.cxf.CXFClientUrls;
 import io.quarkiverse.cxf.CXFRecorder;
 import io.quarkiverse.cxf.ClientInjectionPoint;
 import io.quarkiverse.cxf.CxfClientProducer;
@@ -166,6 +170,28 @@ public class CxfClientProcessor {
                 }).forEach(synthetics::produce);
     }
 
+    /**
+     * Makes the values of {@link CXFClient#url()} of all injection points available at runtime, so that injection points
+     * of the same client specifying different URLs can be detected when the client is created.
+     *
+     * @param config the build time configuration
+     * @param combinedIndexBuildItem the index to search for {@link CXFClient} injection points
+     * @param recorder the recorder to pass the URLs to
+     * @return a new {@link SyntheticBeanBuildItem} producing a {@link CXFClientUrls} bean
+     */
+    @BuildStep
+    @Record(ExecutionTime.STATIC_INIT)
+    SyntheticBeanBuildItem clientUrls(
+            CxfFixedConfig config,
+            CombinedIndexBuildItem combinedIndexBuildItem,
+            CXFRecorder recorder) {
+        return SyntheticBeanBuildItem
+                .configure(CXFClientUrls.class)
+                .scope(Singleton.class)
+                .runtimeValue(recorder.cxfClientUrls(findClientUrls(combinedIndexBuildItem.getIndex(), config)))
+                .done();
+    }
+
     private static AnnotationInstance findWebServiceClientAnnotation(IndexView index, DotName seiName) {
         Collection<AnnotationInstance> annotations = index.getAnnotations(CxfDotNames.WEBSERVICE_CLIENT);
         for (AnnotationInstance annotation : annotations) {
@@ -182,6 +208,27 @@ public class CxfClientProcessor {
     }
 
     public static Stream<ClientInjectionPoint> findClientInjectionPoints(IndexView index) {
+        return findClientAnnotations(index)
+                .map(annotation -> {
+                    final String typeName = annotation.typeName().toString();
+                    try {
+                        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+                        final Class<?> sei = Class.forName(typeName, true, cl);
+                        return new ClientInjectionPoint(annotation.clientName(), sei);
+                    } catch (ClassNotFoundException e) {
+                        throw new RuntimeException("Could not load Service Endpoint Interface " + typeName);
+                    }
+                })
+                .distinct();
+    }
+
+    /**
+     * Finds the {@link CXFClient} annotations present on fields and method parameters in the given {@code index}.
+     *
+     * @param index the index to search
+     * @return a {@link Stream} of {@link ClientAnnotation}s, one for each annotated field and method parameter
+     */
+    static Stream<ClientAnnotation> findClientAnnotations(IndexView index) {
         return index.getAnnotations(CxfDotNames.CXFCLIENT_ANNOTATION).stream()
                 .map(annotationInstance -> {
                     final AnnotationTarget target = annotationInstance.target();
@@ -202,21 +249,54 @@ public class CxfClientProcessor {
                     if (type != null) {
                         type = type.name().equals(CxfDotNames.INJECT_INSTANCE) ? type.asParameterizedType().arguments().get(0)
                                 : type;
-                        final String typeName = type.name().toString();
-                        try {
-                            ClassLoader cl = Thread.currentThread().getContextClassLoader();
-                            final Class<?> sei = Class.forName(typeName, true, cl);
-                            final AnnotationValue value = annotationInstance.value();
-                            return new ClientInjectionPoint(value != null ? value.asString() : "", sei);
-                        } catch (ClassNotFoundException e) {
-                            throw new RuntimeException("Could not load Service Endpoint Interface " + typeName);
-                        }
+                        final AnnotationValue value = annotationInstance.value();
+                        final AnnotationValue url = annotationInstance.value("url");
+                        return new ClientAnnotation(
+                                value != null ? value.asString() : "",
+                                url != null ? url.asString() : "",
+                                type.name());
                     } else {
                         return null;
                     }
                 })
-                .filter(ip -> ip != null)
-                .distinct();
+                .filter(annotation -> annotation != null);
+    }
+
+    /**
+     * Groups the values of {@link CXFClient#url()} of all injection points available in the given {@code index} by
+     * client name.
+     * The injection points without a client name are listed under the name of the only
+     * {@code quarkus.cxf.client."client-name"} having {@code service-interface} set to their Service Endpoint
+     * Interface, or under the fully qualified class name of their Service Endpoint Interface, if there is no such
+     * configuration.
+     * Note that there is a similar algorithm implemented in
+     * {@code io.quarkiverse.cxf.CxfClientProducer.selectClientConfig(CxfConfig, CxfFixedConfig, CXFClientUrls, String, String, String)}.
+     *
+     * @param index the index to search for {@link CXFClient} injection points
+     * @param config the {@link CxfFixedConfig} to search for {@link ClientFixedConfig#serviceInterface()}
+     * @return a map from client names to sorted lists of distinct raw values of {@link CXFClient#url()};
+     *         an injection point not specifying {@link CXFClient#url()} contributes an empty string
+     * @throws IllegalStateException if there are too many {@link ClientFixedConfig}s available for the Service Endpoint
+     *         Interface of some injection point without a client name
+     */
+    static Map<String, List<String>> findClientUrls(IndexView index, CxfFixedConfig config) {
+        final Map<String, Set<String>> urlsByClientName = new TreeMap<>();
+        findClientAnnotations(index).forEach(annotation -> {
+            final String clientName;
+            if (!annotation.clientName().isEmpty()) {
+                clientName = annotation.clientName();
+            } else if (CxfDotNames.CXF_CLIENT_INFO.equals(annotation.typeName())) {
+                /* CXFClientInfo cannot be injected without a client name */
+                return;
+            } else {
+                final String sei = annotation.typeName().toString();
+                clientName = findClientConfigBySei(config, sei).map(Map.Entry::getKey).orElse(sei);
+            }
+            urlsByClientName.computeIfAbsent(clientName, k -> new TreeSet<>()).add(annotation.url());
+        });
+        final Map<String, List<String>> result = new TreeMap<>();
+        urlsByClientName.forEach((clientName, urls) -> result.put(clientName, new ArrayList<>(urls)));
+        return result;
     }
 
     private static Map<String, ClientFixedConfig> findClientSEIsInUse(IndexView index, CxfFixedConfig config) {
@@ -260,7 +340,7 @@ public class CxfClientProcessor {
      * Find a {@link ClientFixedConfig} by the given client configuration {@code key} or by the given
      * {@code serviceInterfaceName}.
      * Note that there is a similar algorithm implemented in
-     * {@code io.quarkiverse.cxf.CxfClientProducer.selectorCXFClientInfo(CxfConfig, CxfFixedConfig, InjectionPoint, CXFClientInfo)}
+     * {@code io.quarkiverse.cxf.CxfClientProducer.selectClientConfig(CxfConfig, CxfFixedConfig, String, String)}
      *
      * @param config the {@link CxfFixedConfig} to search in
      * @param key the key to lookup in the {@link CxfFixedConfig#clients} map
@@ -284,19 +364,38 @@ public class CxfClientProcessor {
             return result;
         }
 
+        return findClientConfigBySei(config, serviceInterfaceName)
+                .map(Map.Entry::getValue)
+                /*
+                 * We cannot tell at build time, whether this is illegal, because there can be some runtime config
+                 * for the given key that we do not see here. So we just return a default ClientFixedConfig
+                 */
+                .orElseGet(ClientFixedConfig::createDefault);
+    }
+
+    /**
+     * Find the only {@link ClientFixedConfig} having {@link ClientFixedConfig#serviceInterface()} equal to the given
+     * {@code serviceInterfaceName}.
+     *
+     * @param config the {@link CxfFixedConfig} to search in
+     * @param serviceInterfaceName {@link ClientFixedConfig#serviceInterface} to look for
+     * @return the matching entry of {@link CxfFixedConfig#clients()} or an empty {@link Optional} if there is none
+     *
+     * @throws IllegalStateException if there are too many {@link ClientFixedConfig}s available for the given
+     *         {@code serviceInterfaceName}
+     */
+    static Optional<Map.Entry<String, ClientFixedConfig>> findClientConfigBySei(
+            CxfFixedConfig config,
+            String serviceInterfaceName) {
         final List<Map.Entry<String, ClientFixedConfig>> configsBySei = config.clients().entrySet().stream()
                 .filter(cl -> serviceInterfaceName.equals(cl.getValue().serviceInterface().orElse(null)))
                 .collect(Collectors.toList());
 
         switch (configsBySei.size()) {
             case 0:
-                /*
-                 * We cannot tell at build time, whether this is illegal, because there can be some runtime config
-                 * for the given key that we do not see here. So we just return a default ClientFixedConfig
-                 */
-                return ClientFixedConfig.createDefault();
+                return Optional.empty();
             case 1:
-                return configsBySei.get(0).getValue();
+                return Optional.of(configsBySei.get(0));
             default:
                 throw new IllegalStateException("quarkus.cxf.client.\"client-name\".service-interface = "
                         + serviceInterfaceName + " expected once, but found " + configsBySei.size() + " times in "
@@ -570,6 +669,18 @@ public class CxfClientProcessor {
     @BuildStep
     ReflectiveClassBuildItem reflectiveClass() {
         return ReflectiveClassBuildItem.builder(HTTPTransportFactory.class).fields().build();
+    }
+
+    /**
+     * A {@link CXFClient} annotation present on a field or on a method parameter.
+     *
+     * @param clientName the value of {@link CXFClient#value()}; an empty string if it is not specified
+     * @param url the raw value of {@link CXFClient#url()}; an empty string if it is not specified
+     * @param typeName the name of the type of the annotated field or method parameter, typically a Service Endpoint
+     *        Interface or {@code io.quarkiverse.cxf.CXFClientInfo}; if the type is
+     *        {@code jakarta.enterprise.inject.Instance<T>}, then the name of {@code T}
+     */
+    record ClientAnnotation(String clientName, String url, DotName typeName) {
     }
 
     private static class ProxyInfo {

@@ -18,6 +18,25 @@ public class DevUiRemoteStatsImpl implements DevUiStats {
     @CXFClient("noUrl")
     Instance<DevUiStats> noUrlStats;
 
+    /** A client whose URL is specified only through {@link CXFClient#url()} */
+    @CXFClient(value = "annotationUrl", url = "${test.stats.url}")
+    DevUiStats annotationUrlStats;
+
+    /** {@code client-endpoint-url} takes precedence over {@link CXFClient#url()} */
+    @CXFClient(value = "bothUrls", url = "http://localhost:8080/services/remote-stats")
+    DevUiStats bothUrlsStats;
+
+    /** The injection points specify different URLs, so the client cannot be created, but it still has to be listed */
+    @CXFClient(value = "conflictingUrls", url = "http://localhost:8080/services/stats")
+    Instance<DevUiStats> conflictingUrlsStats;
+
+    @CXFClient(value = "conflictingUrls", url = "http://localhost:8080/services/remote-stats")
+    Instance<DevUiStats> conflictingUrlsRemoteStats;
+
+    /** The property expression cannot be expanded, so the client cannot be created, but it still has to be listed */
+    @CXFClient(value = "undefinedUrl", url = "${test.not.defined}")
+    Instance<DevUiStats> undefinedUrlStats;
+
     @Override
     public int getClientCount() {
         return stats.getClientCount();

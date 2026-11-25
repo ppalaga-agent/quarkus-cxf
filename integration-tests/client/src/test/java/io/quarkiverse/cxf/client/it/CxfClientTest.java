@@ -51,6 +51,21 @@ public class CxfClientTest {
     }
 
     /**
+     * The URL of the client is specified only through {@code @CXFClient(value = "...", url = "...")},
+     * there is no {@code quarkus.cxf.client.urlAnnotationCalculator.*} option in {@code application.properties}.
+     */
+    @Test
+    void urlAnnotation() {
+        RestAssured.given()
+                .queryParam("a", 7)
+                .queryParam("b", 4)
+                .get("/cxf/url-annotation-client/add")
+                .then()
+                .statusCode(200)
+                .body(is("11"));
+    }
+
+    /**
      * Test whether all ways of injecting a client work properly
      *
      * @param clientKey

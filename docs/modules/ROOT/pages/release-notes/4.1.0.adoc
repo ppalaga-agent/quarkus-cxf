@@ -1,0 +1,38 @@
+= {quarkus-cxf-project-name} 4.1.0 release notes
+
+== Enhancements
+
+=== https://github.com/quarkiverse/quarkus-cxf/issues/2460[#2460] The URL of the remote service endpoint can be specified on `@CXFClient`
+
+Since {quarkus-cxf-project-name} 4.0.0, every client must have
+`xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-client-endpoint-url[quarkus.cxf.client."client-name".client-endpoint-url]`
+set in the configuration.
+That is rather verbose in situations when the URL is known at the injection point, such as in tests and demos,
+or when the client calls a fixed well-known URL.
+
+Since {quarkus-cxf-project-name} 4.1.0, the URL can be specified directly on the injection point
+through the new `url` attribute of `@io.quarkiverse.cxf.annotation.CXFClient`:
+
+.UrlAnnotationClientRestResource.java
+[source,java]
+----
+include::example$calculator-client/UrlAnnotationClientRestResource.java[]
+----
+
+<1> No `quarkus.cxf.client.urlAnnotationCalculator.*` option is required in `application.properties`.
+
+* `client-endpoint-url` takes precedence over the `url` attribute,
+  so that the URL can still be changed per environment without recompiling the application.
+* The value of the attribute may contain property expressions, such as `+${key}+` or `+${key:default}+`.
+* All injection points of the given client have to specify the same value of the `url` attribute,
+  otherwise the client fails when it is created.
+* The attribute can also be used without a client name, e.g. `+@CXFClient(url = "https://example.org/hello")+`.
+  If there is no `quarkus.cxf.client."client-name"` having `service-interface` set to the service endpoint interface
+  of such a client, the client is created with the default configuration
+  and the fully qualified class name of its service endpoint interface is used as its client name.
+* Dev UI shows the effective URL of each client.
+
+The exception messages about the missing URL were reworded to mention both ways of specifying it.
+
+See xref:user-guide/advanced-client-topics/client-endpoint-url-defaults.adoc[Client endpoint URL is required]
+for more details.

@@ -7,12 +7,14 @@ import jakarta.inject.Inject;
 
 import org.jboss.jandex.DotName;
 
+import io.quarkiverse.cxf.CXFClientInfo;
 import io.quarkiverse.cxf.annotation.CXFClient;
 import io.quarkiverse.cxf.annotation.CXFEndpoint;
 
 public class CxfDotNames {
 
     static final DotName CXFCLIENT_ANNOTATION = DotName.createSimple(CXFClient.class.getName());
+    static final DotName CXF_CLIENT_INFO = DotName.createSimple(CXFClientInfo.class.getName());
     static final DotName CXF_ENDPOINT_ANNOTATION = DotName.createSimple(CXFEndpoint.class.getName());
     static final DotName INJECT_INSTANCE = DotName.createSimple(Instance.class.getName());
     static final DotName WEBSERVICE_ANNOTATION = DotName.createSimple("jakarta.jws.WebService");

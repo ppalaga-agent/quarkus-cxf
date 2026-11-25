@@ -71,6 +71,9 @@ public abstract class CxfClientProducer {
     @Inject
     Vertx vertx;
 
+    @Inject
+    CXFClientUrls clientUrls;
+
     private LoggingFactoryCustomizer loggingFactoryCustomizer;
 
     @PostConstruct
@@ -82,7 +85,7 @@ public abstract class CxfClientProducer {
      * Must be public, otherwise: java.lang.VerifyError: Bad access to protected data in invokevirtual
      */
     public Object loadCxfClient(InjectionPoint ip, CXFClientData meta) {
-        return produceCxfClient(selectorCXFClientInfo(config, fixedConfig, ip, meta, vertx));
+        return produceCxfClient(selectorCXFClientInfo(config, fixedConfig, clientUrls, ip, meta, vertx));
     }
 
     /**
@@ -103,7 +106,7 @@ public abstract class CxfClientProducer {
      * Must be public, otherwise: java.lang.VerifyError: Bad access to protected data in invokevirtual
      */
     public CXFClientInfo loadCxfClientInfo(InjectionPoint ip, CXFClientData meta) {
-        return selectorCXFClientInfo(config, fixedConfig, ip, meta, vertx);
+        return selectorCXFClientInfo(config, fixedConfig, clientUrls, ip, meta, vertx);
     }
 
     /**
@@ -253,70 +256,68 @@ public abstract class CxfClientProducer {
     }
 
     /**
-     * Selects the configuration for the client injected at the given {@link InjectionPoint} and creates a
+     * Selects the configuration for the client injected at the given {@link InjectionPoint} using
+     * {@link #selectClientConfig(CxfConfig, CxfFixedConfig, CXFClientUrls, String, String, String)} and creates a
      * {@link CXFClientInfo} out of it.
      *
      * @param config the runtime configuration
      * @param fixedConfig the build time configuration
+     * @param clientUrls the values of {@link CXFClient#url()} of all injection points found at build time
      * @param ip the injection point of the client or of its {@link CXFClientInfo}
      * @param meta the build time metadata of the client's Service Endpoint Interface
      * @param vertx the {@link Vertx} instance to pass to the new {@link CXFClientInfo}
      * @return a new {@link CXFClientInfo}
-     * @throws IllegalStateException if no configuration can be selected for the given {@link InjectionPoint}
-     *         or if the selected configuration is not valid
+     * @throws IllegalStateException if no configuration can be selected for the given {@link InjectionPoint},
+     *         or if the selected configuration is not valid,
+     *         or if the URL of the remote service endpoint cannot be figured out using
+     *         {@link CXFClientUrls#requireEndpointUrl(CxfClientConfig, String, String, java.util.Set)}
+     * @since 4.1.0
      */
     protected static CXFClientInfo selectorCXFClientInfo(
             CxfConfig config,
             CxfFixedConfig fixedConfig,
+            CXFClientUrls clientUrls,
             InjectionPoint ip,
             CXFClientData meta,
             Vertx vertx) {
 
-        final String configKey;
-        if (ip.getAnnotated().isAnnotationPresent(CXFClient.class)) {
-            final CXFClient anno = ip.getAnnotated().getAnnotation(CXFClient.class);
-            configKey = anno.value();
-        } else {
-            configKey = "";
-        }
-        return selectorCXFClientInfo(
-                config,
-                fixedConfig,
+        final CXFClient anno = ip.getAnnotated().getAnnotation(CXFClient.class);
+        final String configKey = anno != null ? anno.value() : "";
+        final String url = anno != null ? anno.url() : "";
+        /*
+         * No configuration can be selected only for clients injected without a client name:
+         * for the named ones, CxfConfig.clients() returns a configuration consisting of default values,
+         * if there are no options set for the given client name.
+         */
+        final ClientConfigSelection selection = selectClientConfig(
+                config, fixedConfig, clientUrls, meta.getSei(), configKey, url)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Cannot create a client for the service interface " + meta.getSei() + " injected into "
+                                + ip.getMember() + " without a client name,"
+                                + " because there is no quarkus.cxf.client.\"client-name\".service-interface = "
+                                + meta.getSei() + " in the configuration; either set"
+                                + " quarkus.cxf.client.\"client-name\".service-interface = " + meta.getSei()
+                                + " for exactly one client or inject the client using an explicit client name,"
+                                + " e.g. @" + CXFClient.class.getSimpleName() + "(\"client-name\");"
+                                + " in both cases, quarkus.cxf.client.\"client-name\".client-endpoint-url"
+                                + " has to be set for that client;"
+                                + " alternatively, specify the URL of the remote service endpoint through"
+                                + " the url attribute of @" + CXFClient.class.getSimpleName()
+                                + " on all injection points of that client"));
+        return new CXFClientInfo(
                 meta,
-                configKey,
-                () -> configKey.isEmpty()
-                        ? new IllegalStateException(
-                                "Cannot create a client for the service interface " + meta.getSei() + " injected into "
-                                        + ip.getMember() + " without a client name,"
-                                        + " because there is no quarkus.cxf.client.\"client-name\".service-interface = "
-                                        + meta.getSei() + " in the configuration; either set"
-                                        + " quarkus.cxf.client.\"client-name\".service-interface = " + meta.getSei()
-                                        + " for exactly one client or inject the client using an explicit client name,"
-                                        + " e.g. @" + CXFClient.class.getSimpleName() + "(\"client-name\");"
-                                        + " in both cases, quarkus.cxf.client.\"client-name\".client-endpoint-url"
-                                        + " has to be set for that client")
-                        /*
-                         * FIXME: (review) This branch is unreachable since this commit: for a non-empty configKey,
-                         * selectClientConfig() never returns an empty Optional, because CxfConfig.clients() is annotated
-                         * with @WithDefaults (ClientEndpointUrlRequiredTest.notConfigured() proves it - it gets
-                         * "client-endpoint-url is not set" rather than "configuration is missing").
-                         * Please remove this branch. If the injection point (ip.getMember()) is worth keeping in the
-                         * message for misspelled client names, it would have to be passed to CXFClientInfo's message
-                         * in some other way.
-                         */
-                        : new IllegalStateException(
-                                "@" + CXFClient.class.getName() + "(\"" + configKey + "\") is present on " + ip.getMember()
-                                        + " but quarkus.cxf.client.\"" + configKey + "\".* configuration is missing"),
+                config,
+                selection.config(),
+                selection.configKey(),
+                clientUrls.getUrls(selection.configKey(), url),
                 vertx);
     }
 
     /*
-     * FIXME: (review) AGENTS.md, section JavaDoc: "Methods and constructors must have @since <version>".
-     * The JavaDoc of both selectorCXFClientInfo() methods was rewritten in this commit without @since.
-     * I added @since 2.7.0 here, because this overload was introduced by 697d3008f (2.7.0.CR1);
-     * the protected overload above has its current signature since 127f70bc3 (2.4.0) - please add it there too.
-     * Question: Dev UI does not call this method anymore, so the protected overload is the only caller.
+     * FIXME: (review) Question: Neither Dev UI nor the protected overload above (since #2460) call this method anymore,
+     * so it has no callers in Quarkus CXF.
      * Does it still need to be public and to take exceptionSupplier, which is used only for clients without a name now?
+     * Note that it does not know anything about @CXFClient.url().
      */
     /**
      * Selects the configuration for the given client using
@@ -333,7 +334,9 @@ public abstract class CxfClientProducer {
      * @param vertx the {@link Vertx} instance to pass to the new {@link CXFClientInfo}
      * @return a new {@link CXFClientInfo}
      * @throws IllegalStateException if no configuration can be selected for the given client
-     *         or if the selected configuration is not valid
+     *         or if the selected configuration is not valid; this includes the situation when
+     *         {@code quarkus.cxf.client."client-name".client-endpoint-url} is not set, because this method does not take
+     *         {@link CXFClient#url()} into account
      * @since 2.7.0
      */
     public static CXFClientInfo selectorCXFClientInfo(
@@ -408,6 +411,50 @@ public abstract class CxfClientProducer {
                         + "; either inject the client using an explicit client name, e.g. @CXFClient(\"client-name\"),"
                         + " or keep that service-interface only in one of those configurations");
         }
+    }
+
+    /**
+     * Selects the configuration for the given client without validating it.
+     * <p>
+     * The configuration is selected in the same way as in
+     * {@link #selectClientConfig(CxfConfig, CxfFixedConfig, String, String)}.
+     * In addition to that, if the client was injected without a client name,
+     * and if there is no {@code quarkus.cxf.client."client-name"} having {@code service-interface} equal to the given
+     * {@code sei},
+     * and if any injection point of such a client specifies a non-empty {@link CXFClient#url()},
+     * then the given {@code sei} is used as the client name
+     * and the configuration available under {@code quarkus.cxf.client."sei"} is selected.
+     * That configuration consists of default values, if no runtime option is set for that client name.
+     *
+     * @param config the runtime configuration
+     * @param fixedConfig the build time configuration
+     * @param clientUrls the values of {@link CXFClient#url()} of all injection points found at build time
+     * @param sei the fully qualified class name of the client's Service Endpoint Interface
+     * @param configKey the client name, such as {@code client-name} in
+     *        {@code quarkus.cxf.client."client-name".client-endpoint-url}; {@code null} or empty if the client was
+     *        injected without a name
+     * @param url the raw value of {@link CXFClient#url()} of the injection point that is currently being satisfied;
+     *        an empty string if there is no such injection point or if it does not specify {@link CXFClient#url()}
+     * @return the selected configuration or an empty {@link Optional} if there is no configuration for the given
+     *         client
+     * @throws IllegalStateException if the given {@code configKey} is {@code null} or empty and there are multiple
+     *         clients having {@code service-interface} equal to the given {@code sei}
+     * @since 4.1.0
+     */
+    public static Optional<ClientConfigSelection> selectClientConfig(
+            CxfConfig config,
+            CxfFixedConfig fixedConfig,
+            CXFClientUrls clientUrls,
+            String sei,
+            String configKey,
+            String url) {
+        final Optional<ClientConfigSelection> selection = selectClientConfig(config, fixedConfig, sei, configKey);
+        if (selection.isPresent() || (configKey != null && !configKey.isEmpty())) {
+            return selection;
+        }
+        return clientUrls.getUrls(sei, url).stream().anyMatch(u -> !u.isEmpty())
+                ? Optional.of(new ClientConfigSelection(sei, config.getClient(sei)))
+                : Optional.empty();
     }
 
     /**

@@ -76,12 +76,13 @@ public class ClientEndpointUrlRequiredTest {
 
     @Test
     void noUrl() {
-        assertThatThrownBy(() -> create(noUrl))
-                .hasStackTraceContaining("Cannot create the client noUrl for the service interface " + SEI
-                        + ", because quarkus.cxf.client.noUrl.client-endpoint-url is not set");
-        assertThatThrownBy(() -> noUrlInfo.get())
-                .hasStackTraceContaining("Cannot create the client noUrl for the service interface " + SEI
-                        + ", because quarkus.cxf.client.noUrl.client-endpoint-url is not set");
+        final String message = "Cannot create the client noUrl for the service interface " + SEI
+                + ", because quarkus.cxf.client.noUrl.client-endpoint-url is not set"
+                + " and the url attribute of @CXFClient is not specified either;"
+                + " set quarkus.cxf.client.noUrl.client-endpoint-url or the url attribute of @CXFClient"
+                + " to the URL of the remote service endpoint";
+        assertThatThrownBy(() -> create(noUrl)).hasStackTraceContaining(message);
+        assertThatThrownBy(() -> noUrlInfo.get()).hasStackTraceContaining(message);
     }
 
     @Test
@@ -115,7 +116,9 @@ public class ClientEndpointUrlRequiredTest {
                         + " in the configuration; either set quarkus.cxf.client.\"client-name\".service-interface = "
                         + UnconfiguredService.class.getName() + " for exactly one client or inject the client using"
                         + " an explicit client name, e.g. @CXFClient(\"client-name\"); in both cases,"
-                        + " quarkus.cxf.client.\"client-name\".client-endpoint-url has to be set for that client");
+                        + " quarkus.cxf.client.\"client-name\".client-endpoint-url has to be set for that client;"
+                        + " alternatively, specify the URL of the remote service endpoint through the url attribute of"
+                        + " @CXFClient on all injection points of that client");
     }
 
     private static <T> void create(Instance<T> instance) {

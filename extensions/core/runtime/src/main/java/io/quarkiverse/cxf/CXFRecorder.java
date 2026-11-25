@@ -52,6 +52,18 @@ public class CXFRecorder {
         return new RuntimeValue<>(cxfClientData);
     }
 
+    /**
+     * Stores the values of {@link io.quarkiverse.cxf.annotation.CXFClient#url()} found at build time in the application.
+     *
+     * @param urlsByClientName the raw values of {@link io.quarkiverse.cxf.annotation.CXFClient#url()} by client name, as
+     *        required by {@link CXFClientUrls#CXFClientUrls(Map)}
+     * @return a new {@link RuntimeValue} holding a new {@link CXFClientUrls}
+     * @since 4.1.0
+     */
+    public RuntimeValue<CXFClientUrls> cxfClientUrls(Map<String, List<String>> urlsByClientName) {
+        return new RuntimeValue<>(new CXFClientUrls(urlsByClientName));
+    }
+
     public static class ServletConfig {
         public CxfEndpointConfig config;
         public String path;

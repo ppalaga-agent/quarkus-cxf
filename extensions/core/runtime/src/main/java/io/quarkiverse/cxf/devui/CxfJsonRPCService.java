@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
+import io.quarkiverse.cxf.CXFClientUrls;
 import io.quarkiverse.cxf.CXFServletInfos;
 import io.quarkiverse.cxf.ClientInjectionPoint;
 import io.quarkiverse.cxf.CxfClientConfig;
@@ -32,6 +33,9 @@ public class CxfJsonRPCService {
     @Inject
     CxfFixedConfig fixedConfig;
 
+    @Inject
+    CXFClientUrls clientUrls;
+
     public List<DevUiServiceInfo> getServices() {
         return servletInfos;
     }
@@ -50,11 +54,10 @@ public class CxfJsonRPCService {
             final String sei = ip.getSei().getName();
             /*
              * We intentionally do not create a CXFClientInfo here, because that would fail for clients that are not
-             * configured properly, e.g. the ones without client-endpoint-url. We want to list those too.
+             * configured properly, e.g. the ones without any URL. We want to list those too.
              */
-            final Optional<CxfClientConfig> clientConfig = CxfClientProducer
-                    .selectClientConfig(config, fixedConfig, sei, ip.getConfigKey())
-                    .map(ClientConfigSelection::config);
+            final Optional<ClientConfigSelection> selection = CxfClientProducer
+                    .selectClientConfig(config, fixedConfig, clientUrls, sei, ip.getConfigKey(), "");
 
             /*
              * FIXME: (review) The address can be null now, which was not possible before this commit.
@@ -67,13 +70,33 @@ public class CxfJsonRPCService {
             final DevUiClientInfo devUiIInfo = new DevUiClientInfo(
                     ip.getConfigKey(),
                     sei,
-                    clientConfig.flatMap(CxfClientConfig::clientEndpointUrl).orElse(null),
-                    clientConfig.flatMap(CxfClientConfig::wsdlPath).orElse(null));
+                    selection.map(sel -> endpointUrl(sel, sei)).orElse(null),
+                    selection.map(ClientConfigSelection::config).flatMap(CxfClientConfig::wsdlPath).orElse(null));
 
             result.add(devUiIInfo);
         }
         result.sort(Comparator.comparing(DevUiClientInfo::getSei));
         return result;
+    }
+
+    /**
+     * Figures out the URL of the remote service endpoint in the same way as when the given client is created.
+     *
+     * @param selection the name and the configuration of the given client
+     * @param sei the fully qualified class name of the Service Endpoint Interface of the given client
+     * @return the URL of the remote service endpoint or {@code null} if it cannot be figured out, in which case the
+     *         given client cannot be created
+     */
+    private String endpointUrl(ClientConfigSelection selection, String sei) {
+        try {
+            return CXFClientUrls.requireEndpointUrl(
+                    selection.config(),
+                    selection.configKey(),
+                    sei,
+                    clientUrls.getUrls(selection.configKey()));
+        } catch (IllegalStateException e) {
+            return null;
+        }
     }
 
     public static void setServletInfos(CXFServletInfos infos) {

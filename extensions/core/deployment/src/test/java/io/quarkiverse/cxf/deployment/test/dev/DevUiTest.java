@@ -38,11 +38,18 @@ public class DevUiTest {
     @Test
     void clientsAndServices() throws InterruptedException {
         final DevUiStats client = getClient(DevUiStats.class, "/services/stats");
-        Assertions.assertThat(client.getClientCount()).isEqualTo(3);
+        Assertions.assertThat(client.getClientCount()).isEqualTo(7);
         Assertions.assertThat(client.getServiceCount()).isEqualTo(2);
 
-        Assertions.assertThat(IntStream.range(0, 3).mapToObj(client::getClient)).containsExactlyInAnyOrder(
+        Assertions.assertThat(IntStream.range(0, 7).mapToObj(client::getClient)).containsExactlyInAnyOrder(
                 "DevUiClientInfo [configKey=, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=http://localhost:8080/services/stats, wsdl=null]",
+                /* The URL specified only through @CXFClient.url() is listed with its property expressions expanded */
+                "DevUiClientInfo [configKey=annotationUrl, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=http://localhost:8080/services/stats, wsdl=null]",
+                /* client-endpoint-url takes precedence over @CXFClient.url() */
+                "DevUiClientInfo [configKey=bothUrls, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=http://localhost:8080/services/stats, wsdl=null]",
+                /* Clients whose URL cannot be figured out cannot be created, but they are still listed */
+                "DevUiClientInfo [configKey=conflictingUrls, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=null, wsdl=null]",
+                "DevUiClientInfo [configKey=undefinedUrl, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=null, wsdl=null]",
                 /* A client without client-endpoint-url cannot be created, but it is still listed */
                 "DevUiClientInfo [configKey=noUrl, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=null, wsdl=null]",
                 "DevUiClientInfo [configKey=stats, sei=io.quarkiverse.cxf.deployment.test.dev.DevUiStats, address=http://localhost:8080/services/stats, wsdl=null]");
@@ -61,6 +68,8 @@ public class DevUiTest {
         props.setProperty("quarkus.cxf.endpoint.\"/remote-stats\".implementor", DevUiRemoteStatsImpl.class.getName());
         props.setProperty("quarkus.cxf.client.stats.client-endpoint-url", "http://localhost:8080/services/stats");
         props.setProperty("quarkus.cxf.client.stats.service-interface", DevUiStats.class.getName());
+        props.setProperty("quarkus.cxf.client.bothUrls.client-endpoint-url", "http://localhost:8080/services/stats");
+        props.setProperty("test.stats.url", "http://localhost:8080/services/stats");
         try {
             props.store(writer, "");
         } catch (IOException e) {

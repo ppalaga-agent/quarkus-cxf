@@ -1,8 +1,18 @@
 [[client-endpoint-url-defaults]]
-= `client-endpoint-url` is required
+= Client endpoint URL is required
 
-Since {quarkus-cxf-project-name} 4.0.0, every client must have the URL of the remote service endpoint set via
-`xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-client-endpoint-url[quarkus.cxf.client."client-name".client-endpoint-url]`:
+Since {quarkus-cxf-project-name} 4.0.0, every client must have the URL of the remote service endpoint specified.
+There are two ways to do that:
+
+* Through the
+  `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-client-endpoint-url[quarkus.cxf.client."client-name".client-endpoint-url]`
+  configuration option
+* Through the <<url-attribute,`url` attribute of `@CXFClient`>> on the injection point of the client,
+  since {quarkus-cxf-project-name} 4.1.0
+
+The configuration option takes precedence over the attribute.
+
+Here is an example of setting the URL in the configuration:
 
 .application.properties
 [source,properties]
@@ -12,17 +22,18 @@ quarkus.cxf.client.myCalculator.service-interface = org.jboss.eap.quickstarts.ws
 ----
 
 There is no default value.
-If you omit the `client-endpoint-url` property, the client fails when it is created with a message like the following:
+If you specify the URL in neither of the two ways,
+the client fails when it is created with a message like the following:
 
 [source]
 ----
-Cannot create the client myCalculator for the service interface org.jboss.eap.quickstarts.wscalculator.calculator.CalculatorService, because quarkus.cxf.client.myCalculator.client-endpoint-url is not set
+Cannot create the client myCalculator for the service interface org.jboss.eap.quickstarts.wscalculator.calculator.CalculatorService, because quarkus.cxf.client.myCalculator.client-endpoint-url is not set and the url attribute of @CXFClient is not specified either
 ----
 
 A client is created when the bean it is injected into is instantiated.
 Hence the failure may happen at application startup or later, depending on the scope of that bean.
 
-The following does not make `client-endpoint-url` optional:
+The following does not make the URL optional:
 
 * An address available in the `wsdl:port` element of the WSDL set via
   `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-wsdl[quarkus.cxf.client."client-name".wsdl]`.
@@ -30,13 +41,104 @@ The following does not make `client-endpoint-url` optional:
 * Setting the address via `jakarta.xml.ws.BindingProvider.ENDPOINT_ADDRESS_PROPERTY` before each request
   as described in xref:user-guide/advanced-client-topics/dynamic-client-configuration.adoc[Dynamic client configuration].
 
+[[url-attribute]]
+== Specifying the URL through `@CXFClient`
+
+Since {quarkus-cxf-project-name} 4.1.0, the URL of the remote service endpoint can be specified
+directly on the injection point of the client through the `url` attribute of `@io.quarkiverse.cxf.annotation.CXFClient`.
+This is handy in situations when the URL is known at the injection point, such as in tests and demos,
+or when the client calls a fixed well-known URL.
+
+.UrlAnnotationClientRestResource.java
+[source,java]
+----
+include::example$calculator-client/UrlAnnotationClientRestResource.java[]
+----
+
+<1> The client named `urlAnnotationCalculator` sends its requests to the URL given in the `url` attribute.
+    No `quarkus.cxf.client.urlAnnotationCalculator.*` option is required in `application.properties`.
+
+=== Overriding the URL in the configuration
+
+If
+`xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-client-endpoint-url[quarkus.cxf.client."client-name".client-endpoint-url]`
+is set for the given client, it is used instead of the `url` attribute.
+Thus you can still change the URL per environment without recompiling the application:
+
+.application.properties
+[source,properties]
+----
+%prod.quarkus.cxf.client.urlAnnotationCalculator.client-endpoint-url = https://example.org/calculator-ws/CalculatorService
+----
+
+The `url` attribute is not evaluated at all in that case.
+
+=== Property expressions
+
+The value of the `url` attribute may contain property expressions,
+such as `+${cxf.it.calculator.baseUri}+` in the example above.
+The keys are looked up in the application configuration.
+The syntax is the same as in `application.properties`:
+
+* `+${key}+` expands to the value of `key`.
+  The value itself may contain further expressions and it may be specific for the current configuration profile.
+* `+${key:default}+` expands to `default`, if `key` is not available in the configuration.
+* Expressions can be combined with literal text, e.g. `+${calculator.baseUri}/calculator-ws/CalculatorService+`.
+
+The client fails when it is created, if
+
+* An expression cannot be expanded, because its key is not available in the configuration and it has no default value
+* The value of the attribute expands to an empty string
+
+Secret handler expressions, such as `+${handler::value}+`, are not supported in the `url` attribute.
+Use `client-endpoint-url` in `application.properties`, if you need those.
+
+=== Multiple injection points of the same client
+
+All injection points of the given client must specify the same value of the `url` attribute.
+Otherwise the client fails when it is created with a message like the following:
+
+[source]
+----
+Cannot create the client myCalculator for the service interface org.jboss.eap.quickstarts.wscalculator.calculator.CalculatorService, because quarkus.cxf.client.myCalculator.client-endpoint-url is not set and the injection points of that client specify different values of the url attribute of @CXFClient: "https://example.org/calculator-ws/CalculatorService", "https://example.com/calculator-ws/CalculatorService"
+----
+
+* The values are compared as they are written in the source code, before their property expressions are expanded.
+  Hence `+${calculator.url}+` and `+https://example.org/calculator-ws/CalculatorService+` are considered different
+  even if `calculator.url` is set to `+https://example.org/calculator-ws/CalculatorService+`.
+* An injection point not specifying the `url` attribute is compared as if it specified an empty string.
+  Hence `@CXFClient("myCalculator")` and `+@CXFClient(value = "myCalculator", url = "https://example.org/...")+`
+  are in conflict.
+* The same applies to injection points of `io.quarkiverse.cxf.CXFClientInfo`.
+  A `CXFClientInfo` injected via `@CXFClient(value = "myCalculator", url = "...")`
+  returns the same URL from `getEndpointAddress()` as the client `myCalculator` sends its requests to.
+* The values of the `url` attribute are not compared at all, if `client-endpoint-url` is set for the given client.
+
+[TIP]
+====
+If the client is injected at multiple places, consider keeping the URL in a single constant,
+or setting `client-endpoint-url` in `application.properties` instead of using the `url` attribute.
+====
+
 == Clients injected without a name
 
 A client injected via `@CXFClient` without a client name is associated with the only `quarkus.cxf.client."client-name"`
 having `service-interface` set to the given service endpoint interface.
-If there is no such configuration, the client fails when it is created.
+If the `url` attribute is specified on such an injection point,
+the `client-endpoint-url` of the associated configuration still takes precedence over it.
+
 If there are multiple such configurations, the application fails at build time.
 In that case, inject the client using an explicit client name, such as `@CXFClient("myClient")`.
+
+If there is no such configuration, then
+
+* If the `url` attribute is specified, e.g. `+@CXFClient(url = "https://example.org/calculator-ws/CalculatorService")+`,
+  then the client is created with the default configuration and with the given URL.
+  The fully qualified class name of the service endpoint interface is used as the name of such a client.
+  It appears in log and exception messages, in metric names
+  and it can also be used for configuring the client, e.g.
+  `quarkus.cxf.client."org.jboss.eap.quickstarts.wscalculator.calculator.CalculatorService".logging.enabled = true`.
+* Otherwise, the client fails when it is created.
 
 [NOTE]
 .Historical note
@@ -49,4 +151,6 @@ Before {quarkus-cxf-project-name} 4.0.0, the configurations having
 `xref:reference/extensions/quarkus-cxf.adoc#quarkus-cxf_quarkus-cxf-client-client-name-alternative[quarkus.cxf.client."client-name".alternative]`
 set to `true` were ignored when looking up the configuration for a client injected without a client name.
 That option is not supported anymore and setting it causes a build time failure.
+
+Before {quarkus-cxf-project-name} 4.1.0, `client-endpoint-url` was the only way to specify the URL.
 ====

@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -221,15 +222,47 @@ public class CXFClientInfo {
     private final boolean secureWsdlAccess;
     private final long workerDispatchTimeout;
 
-    /*
-     * FIXME: (review) AGENTS.md, section JavaDoc: "Public and protected types and type members must have JavaDoc".
-     * The contract of this public constructor changed in this commit: configKey must not be null anymore
-     * and an IllegalStateException is thrown if client-endpoint-url is not set.
-     * Could you please document that here (@param configKey ..., @throws IllegalStateException ..., @since)?
+    /**
+     * Constructs a new {@link CXFClientInfo} for a client whose URL is not specified through
+     * {@link io.quarkiverse.cxf.annotation.CXFClient#url()} on any injection point.
+     *
+     * @param other the build time metadata of the client's Service Endpoint Interface
+     * @param cxfConfig the runtime configuration
+     * @param config the configuration of the given client
+     * @param configKey the name of the given client, such as {@code client-name} in
+     *        {@code quarkus.cxf.client."client-name".client-endpoint-url}; never {@code null}
+     * @param vertx the {@link Vertx} instance to use for reloading the TLS configuration of the given client
+     * @throws IllegalStateException if {@code quarkus.cxf.client."client-name".client-endpoint-url} is not set
+     * @since 3.16.0
      */
     public CXFClientInfo(CXFClientData other, CxfConfig cxfConfig, CxfClientConfig config, String configKey, Vertx vertx) {
+        this(other, cxfConfig, config, configKey, Set.of(), vertx);
+    }
+
+    /**
+     * @param other the build time metadata of the client's Service Endpoint Interface
+     * @param cxfConfig the runtime configuration
+     * @param config the configuration of the given client
+     * @param configKey the name of the given client, such as {@code client-name} in
+     *        {@code quarkus.cxf.client."client-name".client-endpoint-url}; never {@code null}
+     * @param annotationUrls the distinct raw values of {@link io.quarkiverse.cxf.annotation.CXFClient#url()} of all
+     *        injection points of the given client, as returned by {@link CXFClientUrls#getUrls(String, String)};
+     *        evaluated only if {@code quarkus.cxf.client."client-name".client-endpoint-url} is not set
+     * @param vertx the {@link Vertx} instance to use for reloading the TLS configuration of the given client
+     * @throws IllegalStateException if the URL of the remote service endpoint cannot be figured out using
+     *         {@link CXFClientUrls#requireEndpointUrl(CxfClientConfig, String, String, Set)}
+     * @since 4.1.0
+     */
+    public CXFClientInfo(
+            CXFClientData other,
+            CxfConfig cxfConfig,
+            CxfClientConfig config,
+            String configKey,
+            Set<String> annotationUrls,
+            Vertx vertx) {
         Objects.requireNonNull(config);
         Objects.requireNonNull(configKey, "configKey");
+        Objects.requireNonNull(annotationUrls, "annotationUrls");
         this.sei = other.getSei();
         this.soapBinding = config.soapBinding().orElse(other.getSoapBinding());
         this.wsName = other.getWsName();
@@ -240,7 +273,7 @@ public class CXFClientInfo {
         this.auth = new AuthWrapper(config.auth(), config);
         this.vertxConfig = config.vertx();
         this.secureWsdlAccess = config.secureWsdlAccess();
-        this.endpointAddress = requireEndpointAddress(config, configKey, this.sei);
+        this.endpointAddress = CXFClientUrls.requireEndpointUrl(config, configKey, this.sei, annotationUrls);
         this.wsdlUrl = config.wsdlPath().orElse(null);
         addFeatures(config);
         addHandlers(config);
@@ -292,23 +325,6 @@ public class CXFClientInfo {
             validateHttp3Destination(property, httpVersions, proxyConfiguration, proxiedHosts, toRemoteUri(wsdlUrl));
             validateQuicSupport(property, httpVersions, HttpClientPoolRecorder.getQuicSupport());
         }
-    }
-
-    /**
-     * @param config the configuration of the given client
-     * @param configKey the name of the given client, such as {@code client-name} in
-     *        {@code quarkus.cxf.client."client-name".client-endpoint-url}
-     * @param sei the fully qualified class name of the Service Endpoint Interface of the given client
-     * @return the value of {@code quarkus.cxf.client."client-name".client-endpoint-url}
-     * @throws IllegalStateException if {@code quarkus.cxf.client."client-name".client-endpoint-url} is not set
-     */
-    static String requireEndpointAddress(CxfClientConfig config, String configKey, String sei) {
-        return config.clientEndpointUrl().orElseThrow(() -> {
-            final String key = "quarkus.cxf.client." + QuarkusCxfUtils.quoteCongurationKeyIfNeeded(configKey);
-            return new IllegalStateException("Cannot create the client " + configKey + " for the service interface " + sei
-                    + ", because " + key + ".client-endpoint-url is not set; set " + key
-                    + ".client-endpoint-url to the URL of the remote service endpoint");
-        });
     }
 
     /**
